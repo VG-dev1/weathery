@@ -1,15 +1,17 @@
 use anyhow::Result;
+use crossterm::{
+    cursor::{Hide, MoveTo, Show},
+    execute,
+    style::{Color, PrintStyledContent, ResetColor, Stylize},
+    terminal::{DisableLineWrap, EnableLineWrap, EnterAlternateScreen, LeaveAlternateScreen},
+    QueueableCommand,
+};
+use image::{imageops::grayscale, DynamicImage, GenericImageView, Rgba};
+use rand::Rng;
+use std::io::{self, Write};
 use std::time::{Duration, Instant};
 use tokio::sync::watch::Receiver;
 use tokio::time::sleep;
-use rand::Rng;
-use std::io::{self, Write};
-use crossterm::{
-    execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen},
-    cursor::{Hide, Show},
-};
-use image::{DynamicImage, GenericImageView, imageops::grayscale};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Weather {
@@ -21,7 +23,10 @@ pub enum Weather {
 
 impl Weather {
     pub fn from_str(weather_str: &str) -> Self {
-        if weather_str.contains("rain") || weather_str.contains("drizzle") || weather_str.contains("rain showers") {
+        if weather_str.contains("rain")
+            || weather_str.contains("drizzle")
+            || weather_str.contains("rain showers")
+        {
             Weather::Rain
         } else if weather_str.contains("snow") || weather_str.contains("Snow") {
             Weather::Snow
@@ -73,7 +78,7 @@ pub async fn animate_weather(
 ) -> Result<()> {
     let (cols, rows) = get_terminal_size();
 
-    execute!(io::stdout(), EnterAlternateScreen, Hide)?;
+    execute!(io::stdout(), EnterAlternateScreen, Hide, DisableLineWrap)?;
 
     let intensity = match weather {
         Weather::Rain => Intensity::Moderate,
@@ -81,17 +86,59 @@ pub async fn animate_weather(
         Weather::Thunderstorm => Intensity::Heavy,
         Weather::Clear => Intensity::Light,
     };
-    
+
     let result = match weather {
-        Weather::Rain => animate_rain(image, weather_str, rows, cols, intensity, is_grayscale, &mut exit_rx).await,
-        Weather::Snow => animate_snow(image, weather_str, rows, cols, intensity, is_grayscale, &mut exit_rx).await,
-        Weather::Thunderstorm => animate_thunderstorm(image, weather_str, rows, cols, intensity, is_grayscale, &mut exit_rx).await,
+        Weather::Rain => {
+            animate_rain(
+                image,
+                weather_str,
+                rows,
+                cols,
+                intensity,
+                is_grayscale,
+                &mut exit_rx,
+            )
+            .await
+        }
+        Weather::Snow => {
+            animate_snow(
+                image,
+                weather_str,
+                rows,
+                cols,
+                intensity,
+                is_grayscale,
+                &mut exit_rx,
+            )
+            .await
+        }
+        Weather::Thunderstorm => {
+            animate_thunderstorm(
+                image,
+                weather_str,
+                rows,
+                cols,
+                intensity,
+                is_grayscale,
+                &mut exit_rx,
+            )
+            .await
+        }
         Weather::Clear => print_static(image, weather_str, is_grayscale, &mut exit_rx).await,
     };
 
-    execute!(io::stdout(), LeaveAlternateScreen, Show)?;
-    
+    execute!(io::stdout(), EnableLineWrap, LeaveAlternateScreen, Show)?;
+
     result
+}
+
+#[inline]
+fn rain(rgb: Rgba<u8>) -> Rgba<u8> {
+    let r = (rgb[0] as u16 + 100).min(255) as u8;
+    let g = (rgb[1] as u16 + 150).min(255) as u8;
+    let b = (rgb[2] as u16 + 255).min(255) as u8;
+
+    Rgba([r, g, b, rgb[3]])
 }
 
 async fn animate_rain(
@@ -109,7 +156,11 @@ async fn animate_rain(
     let spawn_prob = intensity.spawn_probability();
     let mut last_frame = Instant::now();
 
-    let resized = image.resize_exact(cols as u32, rows.saturating_sub(2) as u32 * 2, image::imageops::FilterType::Lanczos3);
+    let resized = image.resize_exact(
+        cols as u32,
+        rows.saturating_sub(2) as u32 * 2,
+        image::imageops::FilterType::Lanczos3,
+    );
     let resized = if is_grayscale {
         image::DynamicImage::ImageLuma8(grayscale(&resized))
     } else {
@@ -131,35 +182,34 @@ async fn animate_rain(
             Intensity::Moderate => 2,
             Intensity::Heavy => 3,
         };
-        
+
         particles.retain_mut(|p| {
             p.y += speed;
             p.y < rows.saturating_sub(2)
         });
 
-        execute!(io::stdout(), crossterm::cursor::MoveTo(0, 0))?;
-        println!("{weather_str}\n");
+        let weather_str = weather_str.reset();
+
+        io::stdout()
+            .queue(MoveTo(0, 0))?
+            .queue(PrintStyledContent(weather_str))?;
 
         for term_y in 0..rows.saturating_sub(2) as u32 {
+            io::stdout().queue(MoveTo(0, (term_y + 2) as u16))?;
+
             for x in 0..cols as u32 {
                 let top = resized.get_pixel(x, term_y * 2);
                 let bot = resized.get_pixel(x, term_y * 2 + 1);
-                let is_raining = particles.iter().any(|p| p.x as u32 == x && p.y as u32 == term_y);
-                let (fr, fg, fb) = if is_raining {
-                    ((bot[0] as u16 + 100).min(255) as u8,
-                     (bot[1] as u16 + 150).min(255) as u8,
-                     (bot[2] as u16 + 255).min(255) as u8)
-                } else { (bot[0], bot[1], bot[2]) };
-                let (br, bg, bb) = if is_raining {
-                    ((top[0] as u16 + 100).min(255) as u8,
-                     (top[1] as u16 + 150).min(255) as u8,
-                     (top[2] as u16 + 255).min(255) as u8)
-                } else { (top[0], top[1], top[2]) };
-                print!("\x1b[38;2;{fr};{fg};{fb}m\x1b[48;2;{br};{bg};{bb}m▄");
+                let is_raining = particles
+                    .iter()
+                    .any(|p| p.x as u32 == x && p.y as u32 == term_y);
+                let top = if is_raining { rain(top) } else { top };
+                let bot = if is_raining { rain(bot) } else { bot };
+                draw_pixel(top, bot)?;
             }
-            print!("\x1b[m");
+            io::stdout().queue(ResetColor)?;
         }
-        
+
         io::stdout().flush()?;
 
         let elapsed = last_frame.elapsed();
@@ -170,6 +220,15 @@ async fn animate_rain(
     }
 
     Ok(())
+}
+
+#[inline]
+fn snow(rgb: Rgba<u8>) -> Rgba<u8> {
+    let r = (rgb[0] as u16 + 80).min(255) as u8;
+    let g = (rgb[1] as u16 + 80).min(255) as u8;
+    let b = (rgb[2] as u16 + 120).min(255) as u8;
+
+    Rgba([r, g, b, rgb[3]])
 }
 
 async fn animate_snow(
@@ -187,7 +246,11 @@ async fn animate_snow(
     let spawn_prob = intensity.spawn_probability();
     let mut last_frame = Instant::now();
 
-    let resized = image.resize_exact(cols as u32, rows.saturating_sub(2) as u32 * 2, image::imageops::FilterType::Lanczos3);
+    let resized = image.resize_exact(
+        cols as u32,
+        rows.saturating_sub(2) as u32 * 2,
+        image::imageops::FilterType::Lanczos3,
+    );
     let resized = if is_grayscale {
         image::DynamicImage::ImageLuma8(grayscale(&resized))
     } else {
@@ -212,29 +275,30 @@ async fn animate_snow(
             p.y < rows.saturating_sub(2)
         });
 
-        execute!(io::stdout(), crossterm::cursor::MoveTo(0, 0))?;
-        println!("{weather_str}\n");
-        
+        let weather_str = weather_str.reset();
+
+        io::stdout()
+            .queue(MoveTo(0, 0))?
+            .queue(PrintStyledContent(weather_str))?;
+
         for term_y in 0..rows.saturating_sub(2) as u32 {
+            io::stdout().queue(MoveTo(0, (term_y + 2) as u16))?;
+
             for x in 0..cols as u32 {
                 let top = resized.get_pixel(x, term_y * 2);
                 let bot = resized.get_pixel(x, term_y * 2 + 1);
-                let is_snowing = particles.iter().any(|p| p.x as u32 == x && p.y as u32 == term_y);
-                let (fr, fg, fb) = if is_snowing {
-                    ((bot[0] as u16 + 80).min(255) as u8,
-                     (bot[1] as u16 + 80).min(255) as u8,
-                     (bot[2] as u16 + 120).min(255) as u8)
-                } else { (bot[0], bot[1], bot[2]) };
-                let (br, bg, bb) = if is_snowing {
-                    ((top[0] as u16 + 80).min(255) as u8,
-                     (top[1] as u16 + 80).min(255) as u8,
-                     (top[2] as u16 + 120).min(255) as u8)
-                } else { (top[0], top[1], top[2]) };
-                print!("\x1b[38;2;{fr};{fg};{fb}m\x1b[48;2;{br};{bg};{bb}m▄");
+                let is_snowing = particles
+                    .iter()
+                    .any(|p| p.x as u32 == x && p.y as u32 == term_y);
+
+                let top = if is_snowing { snow(top) } else { top };
+                let bot = if is_snowing { snow(bot) } else { bot };
+
+                draw_pixel(top, bot)?;
             }
-            print!("\x1b[m");
+            io::stdout().queue(ResetColor)?;
         }
-        
+
         io::stdout().flush()?;
 
         let elapsed = last_frame.elapsed();
@@ -245,6 +309,27 @@ async fn animate_snow(
     }
 
     Ok(())
+}
+
+#[inline]
+fn flash(rgb: Rgba<u8>) -> Rgba<u8> {
+    let r = (rgb[0] as u16 + 150).min(255) as u8;
+    let g = (rgb[1] as u16 + 150).min(255) as u8;
+    let b = (rgb[2] as u16 + 100).min(255) as u8;
+    Rgba([r, g, b, 255])
+}
+
+#[inline]
+fn storm(rgb: Rgba<u8>, is_raining: bool) -> Rgba<u8> {
+    if is_raining {
+        let a = ((rgb[0] as u16 + rgb[1] as u16 + rgb[2] as u16) / 3) as u8;
+        return Rgba([a, a, a, rgb[3]]);
+    }
+
+    let r = (rgb[0] as u16 + 60).min(255) as u8;
+    let g = (rgb[1] as u16 + 100).min(255) as u8;
+    let b = (rgb[2] as u16 + 180).min(255) as u8;
+    Rgba([r, g, b, rgb[3]])
 }
 
 async fn animate_thunderstorm(
@@ -264,7 +349,11 @@ async fn animate_thunderstorm(
     let mut flash_counter = 0;
     let flash_interval = 40;
 
-    let resized = image.resize_exact(cols as u32, rows.saturating_sub(2) as u32 * 2, image::imageops::FilterType::Lanczos3);
+    let resized = image.resize_exact(
+        cols as u32,
+        rows.saturating_sub(2) as u32 * 2,
+        image::imageops::FilterType::Lanczos3,
+    );
     let resized = if is_grayscale {
         image::DynamicImage::ImageLuma8(grayscale(&resized))
     } else {
@@ -286,7 +375,7 @@ async fn animate_thunderstorm(
             Intensity::Moderate => 2,
             Intensity::Heavy => 4,
         };
-        
+
         particles.retain_mut(|p| {
             p.y += speed;
             p.y < rows.saturating_sub(2)
@@ -295,49 +384,40 @@ async fn animate_thunderstorm(
         let should_flash = flash_counter % flash_interval == 0 && rng.gen_bool(0.15);
 
         execute!(io::stdout(), crossterm::cursor::MoveTo(0, 0))?;
-        
-        if should_flash {
-            println!("\x1b[48;2;255;255;150m{}\x1b[0m\n", weather_str);
+
+        let weather_str = if should_flash {
+            weather_str.with(Color::Rgb {
+                r: 255,
+                g: 255,
+                b: 150,
+            })
         } else {
-            println!("{weather_str}\n");
-        }
-        
+            weather_str.reset()
+        };
+
+        io::stdout().queue(PrintStyledContent(weather_str))?;
+
         for term_y in 0..rows.saturating_sub(2) as u32 {
+            io::stdout().queue(MoveTo(0, (term_y + 2) as u16))?;
+
             for x in 0..cols as u32 {
-                let mut top = resized.get_pixel(x, term_y * 2);
-                let mut bot = resized.get_pixel(x, term_y * 2 + 1);
-                if should_flash {
-                    top = image::Rgba([
-                        (top[0] as u16 + 150).min(255) as u8,
-                        (top[1] as u16 + 150).min(255) as u8,
-                        (top[2] as u16 + 100).min(255) as u8, 255]);
-                    bot = image::Rgba([
-                        (bot[0] as u16 + 150).min(255) as u8,
-                        (bot[1] as u16 + 150).min(255) as u8,
-                        (bot[2] as u16 + 100).min(255) as u8, 255]);
-                }
-                let is_raining = particles.iter().any(|p| p.x as u32 == x && p.y as u32 == term_y);
-                let (fr, fg, fb) = if is_raining {
-                    ((bot[0] as u16 + 60).min(255) as u8,
-                     (bot[1] as u16 + 100).min(255) as u8,
-                     (bot[2] as u16 + 180).min(255) as u8)
-                } else {
-                    let a = ((bot[0] as u16 + bot[1] as u16 + bot[2] as u16) / 3) as u8;
-                    (a, a, a)
-                };
-                let (br, bg, bb) = if is_raining {
-                    ((top[0] as u16 + 60).min(255) as u8,
-                     (top[1] as u16 + 100).min(255) as u8,
-                     (top[2] as u16 + 180).min(255) as u8)
-                } else {
-                    let a = ((top[0] as u16 + top[1] as u16 + top[2] as u16) / 3) as u8;
-                    (a, a, a)
-                };
-                print!("\x1b[38;2;{fr};{fg};{fb}m\x1b[48;2;{br};{bg};{bb}m▄");
+                let top = resized.get_pixel(x, term_y * 2);
+                let bot = resized.get_pixel(x, term_y * 2 + 1);
+
+                let top = if should_flash { flash(top) } else { top };
+                let bot = if should_flash { flash(bot) } else { bot };
+
+                let is_raining = particles
+                    .iter()
+                    .any(|p| p.x as u32 == x && p.y as u32 == term_y);
+
+                let top = storm(top, is_raining);
+                let bot = storm(bot, is_raining);
+                draw_pixel(top, bot)?;
             }
-            print!("\x1b[m");
+            io::stdout().queue(ResetColor)?;
         }
-        
+
         io::stdout().flush()?;
         flash_counter += 1;
 
@@ -358,26 +438,34 @@ async fn print_static(
     exit_rx: &mut Receiver<bool>,
 ) -> Result<()> {
     let (cols, rows) = get_terminal_size();
-    let resized = image.resize_exact(cols as u32, rows.saturating_sub(2) as u32 * 2, image::imageops::FilterType::Lanczos3);
+    let resized = image.resize_exact(
+        cols as u32,
+        rows.saturating_sub(2) as u32 * 2,
+        image::imageops::FilterType::Lanczos3,
+    );
     let resized = if is_grayscale {
         image::DynamicImage::ImageLuma8(grayscale(&resized))
     } else {
         resized
     };
-    
-    execute!(io::stdout(), crossterm::cursor::MoveTo(0, 0))?;
-    println!("{weather_str}\n");
-    
+
+    let weather_str = weather_str.reset();
+
+    io::stdout()
+        .queue(MoveTo(0, 0))?
+        .queue(PrintStyledContent(weather_str))?;
+
     for term_y in 0..rows.saturating_sub(2) as u32 {
+        io::stdout().queue(MoveTo(0, (term_y + 2) as u16))?;
+
         for x in 0..cols as u32 {
             let top = resized.get_pixel(x, term_y * 2);
             let bot = resized.get_pixel(x, term_y * 2 + 1);
-            print!("\x1b[38;2;{};{};{}m\x1b[48;2;{};{};{}m▄",
-                bot[0], bot[1], bot[2], top[0], top[1], top[2]);
+            draw_pixel(top, bot)?;
         }
-        print!("\x1b[m");
+        io::stdout().queue(ResetColor)?;
     }
-    
+
     io::stdout().flush()?;
 
     loop {
@@ -387,6 +475,23 @@ async fn print_static(
         sleep(Duration::from_millis(100)).await;
     }
 
+    Ok(())
+}
+
+#[inline]
+fn draw_pixel(top: Rgba<u8>, bot: Rgba<u8>) -> Result<()> {
+    let fg = Color::Rgb {
+        r: bot[0],
+        g: bot[1],
+        b: bot[2],
+    };
+    let bg = Color::Rgb {
+        r: top[0],
+        g: top[1],
+        b: top[2],
+    };
+    let pixel = "▄".with(fg).on(bg);
+    io::stdout().queue(PrintStyledContent(pixel))?;
     Ok(())
 }
 

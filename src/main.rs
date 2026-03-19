@@ -1,14 +1,14 @@
 use anyhow::Result;
 use clap::Parser;
 
-mod weather;
-mod image_fetch;
 mod animate;
+mod image_fetch;
+mod weather;
 
+use animate::{animate_weather, Weather};
+use image_fetch::{download_image, get_city_image_url};
 use tokio::sync::watch;
 use weather::get_weather;
-use image_fetch::{get_city_image_url, download_image};
-use animate::{animate_weather, Weather};
 
 use crossterm::{
     event::{self, Event, KeyCode},
@@ -16,7 +16,11 @@ use crossterm::{
 };
 
 #[derive(Parser, Debug)]
-#[command(name = "weathery", version, about = "A terminal weather app with animated cityscapes")]
+#[command(
+    name = "weathery",
+    version,
+    about = "A terminal weather app with animated cityscapes"
+)]
 struct Args {
     /// City to fetch the weather of
     #[arg(num_args = 1.., value_delimiter = ' ')]
@@ -44,10 +48,8 @@ async fn main() -> Result<()> {
         std::process::exit(1);
     }
 
-    let (image_url, weather_str) = tokio::try_join!(
-        get_city_image_url(&city),
-        get_weather(&city, args.simulate),
-    )?;
+    let (image_url, weather_str) =
+        tokio::try_join!(get_city_image_url(&city), get_weather(&city, args.simulate),)?;
 
     let Some(url) = image_url else {
         eprintln!("Error: Could not find city: '{city}'.");
