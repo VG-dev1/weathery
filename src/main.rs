@@ -8,7 +8,7 @@ mod weather;
 use animate::{animate_weather, Weather};
 use image_fetch::{download_image, get_city_image_url};
 use tokio::sync::watch;
-use weather::get_weather;
+use weather::{get_weather, Units};
 
 use crossterm::{
     event::{self, Event, KeyCode},
@@ -48,8 +48,8 @@ async fn main() -> Result<()> {
         std::process::exit(1);
     }
 
-    let (image_url, weather_str) =
-        tokio::try_join!(get_city_image_url(&city), get_weather(&city, args.simulate),)?;
+    let (image_url, weather_data) =
+        tokio::try_join!(get_city_image_url(&city), get_weather(&city, args.simulate))?;
 
     let Some(url) = image_url else {
         eprintln!("Error: Could not find city: '{city}'.");
@@ -58,28 +58,36 @@ async fn main() -> Result<()> {
 
     if args.colorful {
         args.grayscale = false;
-    } else if weather_str.contains("fog") || weather_str.contains("Fog") {
+    } else if weather_data.description.contains("fog") || weather_data.description.contains("Fog") {
         args.grayscale = true;
     }
 
     let img = download_image(&url).await?;
-    let weather = Weather::from_str(&weather_str);
+    let weather = Weather::from_str(weather_data.description);
 
-    let (tx, rx) = watch::channel(false);
+    let (exit_tx, exit_rx) = watch::channel(false);
+    let (weather_tx, weather_rx) = watch::channel(weather_data.format(Units::Metric));
+    let wd = weather_data.clone();
+
     tokio::spawn(async move {
         enable_raw_mode().unwrap();
+        let mut units = Units::Metric;
         loop {
             if let Event::Key(key) = event::read().unwrap() {
-                if key.code == KeyCode::Char('q') {
-                    tx.send(true).unwrap();
-                    break;
+                match key.code {
+                    KeyCode::Char('q') => { 
+                        exit_tx.send(true).unwrap(); break; 
+                    } KeyCode::Char('u') => {
+                        units = units.toggle();
+                        let _ = weather_tx.send(wd.format(units));
+                    }
+                    _ => {}
                 }
             }
         }
         disable_raw_mode().unwrap();
     });
 
-    animate_weather(&img, &weather, &weather_str, args.grayscale, rx).await?;
-
+    animate_weather(&img, &weather, weather_rx, exit_rx, args.grayscale).await?;
     Ok(())
 }
