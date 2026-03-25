@@ -24,19 +24,58 @@ struct CurrentWeather {
     weathercode: u32,
 }
 
-pub async fn get_weather(city: &str, simulate_code: Option<u32>) -> Result<String> {
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Units {
+    Metric,
+    Imperial,
+}
+
+impl Units {
+    pub fn toggle(self) -> Self {
+        match self {
+            Units::Metric => Units::Imperial,
+            Units::Imperial => Units::Metric,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct WeatherData {
+    pub city: String,
+    pub temp_c: f64,
+    pub windspeed_kmh: f64,
+    pub description: &'static str,
+}
+
+impl WeatherData {
+    pub fn format(&self, units: Units) -> String {
+        match units {
+            Units::Metric => format!(
+                "{} Weather: {} | {:.1}°C | Wind: {:.1} km/h",
+                self.city, self.description, self.temp_c, self.windspeed_kmh
+            ),
+            Units::Imperial => {
+                let temp_f = self.temp_c * 9.0 / 5.0 + 32.0;
+                let wind_mph = self.windspeed_kmh * 0.621_371;
+                format!(
+                    "{} Weather: {} | {:.1}°F | Wind: {:.1} mph", // I personally find it quite strange how you note mph as mph and not mp/h
+                    self.city, self.description, temp_f, wind_mph
+                )
+            }
+        }
+    }
+}
+
+pub async fn get_weather(city: &str, simulate_code: Option<u32>) -> Result<WeatherData> {
     let client = reqwest::Client::new();
 
     let geo: GeoResponse = client
         .get("https://geocoding-api.open-meteo.com/v1/search")
         .query(&[("name", city), ("count", "1")])
-        .send()
-        .await?
-        .json()
-        .await?;
+        .send().await?.json().await?;
 
-    let location = geo
-        .results
+    let location = geo.results
         .and_then(|r| r.into_iter().next())
         .ok_or_else(|| anyhow!("Weather location not found for '{city}'"))?;
 
@@ -47,18 +86,18 @@ pub async fn get_weather(city: &str, simulate_code: Option<u32>) -> Result<Strin
             ("longitude", location.longitude.to_string()),
             ("current_weather", "true".to_string()),
         ])
-        .send()
-        .await?
-        .json()
-        .await?;
+        .send().await?.json().await?;
 
     let cw = weather.current_weather;
-    let desc = weather_description(simulate_code.unwrap_or(cw.weathercode));
+    let weathercode = simulate_code.unwrap_or(cw.weathercode);
+    // let desc = weather_description(simulate_code.unwrap_or(cw.weathercode));
 
-    Ok(format!(
-        "{city} Weather: {desc} | {}°C | Wind: {} km/h",
-        cw.temperature, cw.windspeed
-    ))
+    Ok(WeatherData {
+        city: city.to_string(),
+        temp_c: cw.temperature,
+        windspeed_kmh: cw.windspeed,
+        description: weather_description(weathercode),
+    })
 }
 
 fn weather_description(code: u32) -> &'static str {

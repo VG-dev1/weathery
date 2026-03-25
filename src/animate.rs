@@ -72,9 +72,9 @@ impl Intensity {
 pub async fn animate_weather(
     image: &DynamicImage,
     weather: &Weather,
-    weather_str: &str,
-    is_grayscale: bool,
+    mut weather_rx: Receiver<String>,
     mut exit_rx: Receiver<bool>,
+    is_grayscale: bool,
 ) -> Result<()> {
     let (cols, rows) = get_terminal_size();
 
@@ -91,11 +91,11 @@ pub async fn animate_weather(
         Weather::Rain => {
             animate_rain(
                 image,
-                weather_str,
                 rows,
                 cols,
                 intensity,
                 is_grayscale,
+                &mut weather_rx,
                 &mut exit_rx,
             )
             .await
@@ -103,11 +103,11 @@ pub async fn animate_weather(
         Weather::Snow => {
             animate_snow(
                 image,
-                weather_str,
                 rows,
                 cols,
                 intensity,
                 is_grayscale,
+                &mut weather_rx,
                 &mut exit_rx,
             )
             .await
@@ -115,16 +115,16 @@ pub async fn animate_weather(
         Weather::Thunderstorm => {
             animate_thunderstorm(
                 image,
-                weather_str,
                 rows,
                 cols,
                 intensity,
                 is_grayscale,
+                &mut weather_rx,
                 &mut exit_rx,
             )
             .await
         }
-        Weather::Clear => print_static(image, weather_str, is_grayscale, &mut exit_rx).await,
+        Weather::Clear => print_static(image, is_grayscale, &mut weather_rx, &mut exit_rx).await,
     };
 
     execute!(io::stdout(), EnableLineWrap, LeaveAlternateScreen, Show)?;
@@ -143,11 +143,11 @@ fn rain(rgb: Rgba<u8>) -> Rgba<u8> {
 
 async fn animate_rain(
     image: &DynamicImage,
-    weather_str: &str,
     rows: u16,
     cols: u16,
     intensity: Intensity,
     is_grayscale: bool,
+    weather_rx: &mut Receiver<String>,
     exit_rx: &mut Receiver<bool>,
 ) -> Result<()> {
     let mut particles: Vec<Particle> = Vec::new();
@@ -188,11 +188,11 @@ async fn animate_rain(
             p.y < rows.saturating_sub(2)
         });
 
-        let weather_str = weather_str.reset();
+        let ws = weather_rx.borrow().clone();
 
         io::stdout()
             .queue(MoveTo(0, 0))?
-            .queue(PrintStyledContent(weather_str))?;
+            .queue(PrintStyledContent(ws.as_str().reset()))?;
 
         for term_y in 0..rows.saturating_sub(2) as u32 {
             io::stdout().queue(MoveTo(0, (term_y + 2) as u16))?;
@@ -233,11 +233,11 @@ fn snow(rgb: Rgba<u8>) -> Rgba<u8> {
 
 async fn animate_snow(
     image: &DynamicImage,
-    weather_str: &str,
     rows: u16,
     cols: u16,
     intensity: Intensity,
     is_grayscale: bool,
+    weather_rx: &mut Receiver<String>,
     exit_rx: &mut Receiver<bool>,
 ) -> Result<()> {
     let mut particles: Vec<Particle> = Vec::new();
@@ -275,11 +275,11 @@ async fn animate_snow(
             p.y < rows.saturating_sub(2)
         });
 
-        let weather_str = weather_str.reset();
+        let ws = weather_rx.borrow().clone();
 
         io::stdout()
             .queue(MoveTo(0, 0))?
-            .queue(PrintStyledContent(weather_str))?;
+            .queue(PrintStyledContent(ws.as_str().reset()))?;
 
         for term_y in 0..rows.saturating_sub(2) as u32 {
             io::stdout().queue(MoveTo(0, (term_y + 2) as u16))?;
@@ -334,11 +334,11 @@ fn storm(rgb: Rgba<u8>, is_raining: bool) -> Rgba<u8> {
 
 async fn animate_thunderstorm(
     image: &DynamicImage,
-    weather_str: &str,
     rows: u16,
     cols: u16,
     intensity: Intensity,
     is_grayscale: bool,
+    weather_rx: &mut Receiver<String>,
     exit_rx: &mut Receiver<bool>,
 ) -> Result<()> {
     let mut particles: Vec<Particle> = Vec::new();
@@ -385,14 +385,16 @@ async fn animate_thunderstorm(
 
         execute!(io::stdout(), crossterm::cursor::MoveTo(0, 0))?;
 
+        let ws = weather_rx.borrow().clone();
+
         let weather_str = if should_flash {
-            weather_str.with(Color::Rgb {
+            ws.as_str().with(Color::Rgb {
                 r: 255,
                 g: 255,
                 b: 150,
             })
         } else {
-            weather_str.reset()
+            ws.as_str().reset()
         };
 
         io::stdout().queue(PrintStyledContent(weather_str))?;
@@ -433,8 +435,8 @@ async fn animate_thunderstorm(
 
 async fn print_static(
     image: &DynamicImage,
-    weather_str: &str,
     is_grayscale: bool,
+    weather_rx: &mut Receiver<String>,
     exit_rx: &mut Receiver<bool>,
 ) -> Result<()> {
     let (cols, rows) = get_terminal_size();
@@ -449,11 +451,11 @@ async fn print_static(
         resized
     };
 
-    let weather_str = weather_str.reset();
+    let ws = weather_rx.borrow().clone();
 
     io::stdout()
         .queue(MoveTo(0, 0))?
-        .queue(PrintStyledContent(weather_str))?;
+        .queue(PrintStyledContent(ws.as_str().reset()))?;
 
     for term_y in 0..rows.saturating_sub(2) as u32 {
         io::stdout().queue(MoveTo(0, (term_y + 2) as u16))?;
@@ -469,10 +471,16 @@ async fn print_static(
     io::stdout().flush()?;
 
     loop {
-        if *exit_rx.borrow() {
-            break;
+        tokio::select! {
+            _ = exit_rx.changed() => { if *exit_rx.borrow() { break; } }
+            _ = weather_rx.changed() => {
+                let ws = weather_rx.borrow().clone();
+                io::stdout()
+                    .queue(MoveTo(0, 0))?
+                    .queue(PrintStyledContent(ws.as_str().reset()))?;
+                io::stdout().flush()?;
+            }
         }
-        sleep(Duration::from_millis(100)).await;
     }
 
     Ok(())

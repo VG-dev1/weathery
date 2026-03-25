@@ -100,11 +100,12 @@ weathery "Copenhagen" --grayscale
 ## Keyboard controls
 
 - `q` - Quit
+- `u` - Toggle units
 
 ## Roadmap
 
 - [ ] More key bindings
-- [ ] Imperial units
+- [x] Imperial unit
 - [ ] Auto-detect user's location
 - [ ] More animation settings
 - [ ] Installation via other package managers
