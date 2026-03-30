@@ -27,7 +27,7 @@ cargo install weathery
 You need Rust installed.
 
 ```bash
-git clone https://github.com/weathery/weathery.git
+git clone https://github.com/VG-dev1/weathery.git
 cd weathery
 cargo install --path .
 ```
@@ -95,6 +95,12 @@ weathery "Copenhagen" --colorful
 
 # Grayscale
 weathery "Copenhagen" --grayscale
+```
+
+### Use imperial units
+
+```bash
+weathery "Copenhagen" --imperial
 ```
 
 ## Keyboard controls
