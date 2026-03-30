@@ -88,13 +88,10 @@ async fn main() -> Result<()> {
         loop {
             if poll(Duration::from_millis(100)).unwrap_or(false) {
                 match read() {
-                    Ok(Event::Key(key)) => match key.code {
-                        KeyCode::Char('q') => {
-                            exit_tx.send(true).unwrap();
-                            break;
-                        }
-                        _ => {}
-                    },
+                    Ok(Event::Key(key)) if key.code == KeyCode::Char('q') => {
+                        exit_tx.send(true).unwrap();
+                        break;
+                    }
                     Ok(Event::Resize(_, _)) => {
                         let _ = resize_tx.send(());
                     }

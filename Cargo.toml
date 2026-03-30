@@ -1,12 +1,14 @@
 [package]
 name = "weathery"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
-license = "GPL-3.0-or-later"
 authors = ["VG-dev1 <vitohackergrgic@gmail.com>"]
 description = "A terminal weather app with animated cityscapes"
 keywords = ["cli", "command-line", "weather", "ascii"]
 categories = ["command-line-utilities"]
+license = "GPL-3.0-or-later"
+readme = "README.md"
+repository = "https://github.com/VG-dev1/weathery"
 
 [[bin]]
 name = "weathery"
