@@ -5,15 +5,16 @@ mod animate;
 mod image_fetch;
 mod weather;
 
-use animate::{animate_weather, Weather};
+use animate::{Weather, animate_weather};
 use image_fetch::{download_image, get_city_image_url};
 use tokio::sync::watch;
-use weather::{get_weather, Units};
+use weather::{Units, get_weather};
 
 use crossterm::{
-    event::{self, Event, KeyCode},
+    event::{Event, KeyCode, poll, read},
     terminal::{disable_raw_mode, enable_raw_mode},
 };
+use std::time::Duration;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -34,6 +35,10 @@ struct Args {
     #[arg(long)]
     colorful: bool,
 
+    /// Use imperial units (Fahrenheit, mph) instead of metric
+    #[arg(long)]
+    imperial: bool,
+
     /// Simulate a specific weather condition
     #[arg(long)]
     simulate: Option<u32>,
@@ -41,7 +46,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut args = Args::parse();
+    let args = Args::parse();
     let city = args.city.join(" ");
     if city.is_empty() {
         eprintln!("Error: City not provided.");
@@ -56,38 +61,54 @@ async fn main() -> Result<()> {
         std::process::exit(1);
     };
 
-    if args.colorful {
-        args.grayscale = false;
+    let grayscale = if args.colorful {
+        false
     } else if weather_data.description.contains("fog") || weather_data.description.contains("Fog") {
-        args.grayscale = true;
-    }
+        true
+    } else {
+        args.grayscale
+    };
 
     let img = download_image(&url).await?;
     let weather = Weather::from_str(weather_data.description);
 
+    let units = if args.imperial {
+        Units::Imperial
+    } else {
+        Units::Metric
+    };
+
     let (exit_tx, exit_rx) = watch::channel(false);
-    let (weather_tx, weather_rx) = watch::channel(weather_data.format(Units::Metric));
-    let wd = weather_data.clone();
+    let (_, weather_rx) = watch::channel(weather_data.format(units));
+    let (resize_tx, resize_rx) = watch::channel(());
 
     tokio::spawn(async move {
         enable_raw_mode().unwrap();
-        let mut units = Units::Metric;
+
         loop {
-            if let Event::Key(key) = event::read().unwrap() {
-                match key.code {
-                    KeyCode::Char('q') => { 
-                        exit_tx.send(true).unwrap(); break; 
-                    } KeyCode::Char('u') => {
-                        units = units.toggle();
-                        let _ = weather_tx.send(wd.format(units));
+            if poll(Duration::from_millis(100)).unwrap_or(false) {
+                match read() {
+                    Ok(Event::Key(key)) => match key.code {
+                        KeyCode::Char('q') => {
+                            exit_tx.send(true).unwrap();
+                            break;
+                        }
+                        _ => {}
+                    },
+                    Ok(Event::Resize(_, _)) => {
+                        let _ = resize_tx.send(());
                     }
                     _ => {}
                 }
+            }
+
+            if *exit_tx.borrow() {
+                break;
             }
         }
         disable_raw_mode().unwrap();
     });
 
-    animate_weather(&img, &weather, weather_rx, exit_rx, args.grayscale).await?;
+    animate_weather(&img, &weather, weather_rx, exit_rx, resize_rx, grayscale).await?;
     Ok(())
 }

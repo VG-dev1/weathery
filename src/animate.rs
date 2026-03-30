@@ -1,12 +1,12 @@
 use anyhow::Result;
 use crossterm::{
+    QueueableCommand,
     cursor::{Hide, MoveTo, Show},
     execute,
     style::{Color, PrintStyledContent, ResetColor, Stylize},
     terminal::{DisableLineWrap, EnableLineWrap, EnterAlternateScreen, LeaveAlternateScreen},
-    QueueableCommand,
 };
-use image::{imageops::grayscale, DynamicImage, GenericImageView, Rgba};
+use image::{DynamicImage, GenericImageView, Rgba, imageops::grayscale};
 use rand::Rng;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
@@ -74,6 +74,7 @@ pub async fn animate_weather(
     weather: &Weather,
     mut weather_rx: Receiver<String>,
     mut exit_rx: Receiver<bool>,
+    mut resize_rx: Receiver<()>,
     is_grayscale: bool,
 ) -> Result<()> {
     let (cols, rows) = get_terminal_size();
@@ -97,6 +98,7 @@ pub async fn animate_weather(
                 is_grayscale,
                 &mut weather_rx,
                 &mut exit_rx,
+                &mut resize_rx,
             )
             .await
         }
@@ -109,6 +111,7 @@ pub async fn animate_weather(
                 is_grayscale,
                 &mut weather_rx,
                 &mut exit_rx,
+                &mut resize_rx,
             )
             .await
         }
@@ -121,10 +124,20 @@ pub async fn animate_weather(
                 is_grayscale,
                 &mut weather_rx,
                 &mut exit_rx,
+                &mut resize_rx,
             )
             .await
         }
-        Weather::Clear => print_static(image, is_grayscale, &mut weather_rx, &mut exit_rx).await,
+        Weather::Clear => {
+            print_static(
+                image,
+                is_grayscale,
+                &mut weather_rx,
+                &mut exit_rx,
+                &mut resize_rx,
+            )
+            .await
+        }
     };
 
     execute!(io::stdout(), EnableLineWrap, LeaveAlternateScreen, Show)?;
@@ -143,83 +156,97 @@ fn rain(rgb: Rgba<u8>) -> Rgba<u8> {
 
 async fn animate_rain(
     image: &DynamicImage,
-    rows: u16,
-    cols: u16,
+    mut rows: u16,
+    mut cols: u16,
     intensity: Intensity,
     is_grayscale: bool,
     weather_rx: &mut Receiver<String>,
     exit_rx: &mut Receiver<bool>,
+    resize_rx: &mut Receiver<()>,
 ) -> Result<()> {
-    let mut particles: Vec<Particle> = Vec::new();
-    let mut rng = rand::thread_rng();
-    let delay = Duration::from_millis(intensity.delay_ms());
-    let spawn_prob = intensity.spawn_probability();
-    let mut last_frame = Instant::now();
-
-    let resized = image.resize_exact(
-        cols as u32,
-        rows.saturating_sub(2) as u32 * 2,
-        image::imageops::FilterType::Lanczos3,
-    );
-    let resized = if is_grayscale {
-        image::DynamicImage::ImageLuma8(grayscale(&resized))
-    } else {
-        resized
-    };
-
     loop {
-        if *exit_rx.borrow() {
-            break;
-        }
+        let mut particles: Vec<Particle> = Vec::new();
+        let mut rng = rand::thread_rng();
+        let delay = Duration::from_millis(intensity.delay_ms());
+        let spawn_prob = intensity.spawn_probability();
+        let mut last_frame = Instant::now();
 
-        if rng.gen_bool(spawn_prob) {
-            let x = rng.gen_range(0..cols);
-            particles.push(Particle { x, y: 0 });
-        }
-
-        let speed = match intensity {
-            Intensity::Light => 1,
-            Intensity::Moderate => 2,
-            Intensity::Heavy => 3,
+        let resized = image.resize_exact(
+            cols as u32,
+            rows.saturating_sub(2) as u32 * 2,
+            image::imageops::FilterType::Lanczos3,
+        );
+        let resized = if is_grayscale {
+            image::DynamicImage::ImageLuma8(grayscale(&resized))
+        } else {
+            resized
         };
 
-        particles.retain_mut(|p| {
-            p.y += speed;
-            p.y < rows.saturating_sub(2)
-        });
-
-        let ws = weather_rx.borrow().clone();
-
-        io::stdout()
-            .queue(MoveTo(0, 0))?
-            .queue(PrintStyledContent(ws.as_str().reset()))?;
-
-        for term_y in 0..rows.saturating_sub(2) as u32 {
-            io::stdout().queue(MoveTo(0, (term_y + 2) as u16))?;
-
-            for x in 0..cols as u32 {
-                let top = resized.get_pixel(x, term_y * 2);
-                let bot = resized.get_pixel(x, term_y * 2 + 1);
-                let is_raining = particles
-                    .iter()
-                    .any(|p| p.x as u32 == x && p.y as u32 == term_y);
-                let top = if is_raining { rain(top) } else { top };
-                let bot = if is_raining { rain(bot) } else { bot };
-                draw_pixel(top, bot)?;
+        loop {
+            if *exit_rx.borrow() {
+                return Ok(());
             }
-            io::stdout().queue(ResetColor)?;
-        }
 
-        io::stdout().flush()?;
+            if resize_rx.has_changed().unwrap_or(false) {
+                let (new_cols, new_rows) = get_terminal_size();
+                if new_cols != cols || new_rows != rows {
+                    cols = new_cols;
+                    rows = new_rows;
+                    execute!(
+                        io::stdout(),
+                        crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
+                    )?;
+                    break;
+                }
+            }
 
-        let elapsed = last_frame.elapsed();
-        if elapsed < delay {
-            sleep(delay - elapsed).await;
+            if rng.gen_bool(spawn_prob) {
+                let x = rng.gen_range(0..cols);
+                particles.push(Particle { x, y: 0 });
+            }
+
+            let speed = match intensity {
+                Intensity::Light => 1,
+                Intensity::Moderate => 2,
+                Intensity::Heavy => 3,
+            };
+
+            particles.retain_mut(|p| {
+                p.y += speed;
+                p.y < rows.saturating_sub(2)
+            });
+
+            let ws = weather_rx.borrow().clone();
+
+            io::stdout()
+                .queue(MoveTo(0, 0))?
+                .queue(PrintStyledContent(ws.as_str().reset()))?;
+
+            for term_y in 0..rows.saturating_sub(2) as u32 {
+                io::stdout().queue(MoveTo(0, (term_y + 2) as u16))?;
+
+                for x in 0..cols as u32 {
+                    let top = resized.get_pixel(x, term_y * 2);
+                    let bot = resized.get_pixel(x, term_y * 2 + 1);
+                    let is_raining = particles
+                        .iter()
+                        .any(|p| p.x as u32 == x && p.y as u32 == term_y);
+                    let top = if is_raining { rain(top) } else { top };
+                    let bot = if is_raining { rain(bot) } else { bot };
+                    draw_pixel(top, bot)?;
+                }
+                io::stdout().queue(ResetColor)?;
+            }
+
+            io::stdout().flush()?;
+
+            let elapsed = last_frame.elapsed();
+            if elapsed < delay {
+                sleep(delay - elapsed).await;
+            }
+            last_frame = Instant::now();
         }
-        last_frame = Instant::now();
     }
-
-    Ok(())
 }
 
 #[inline]
@@ -233,47 +260,257 @@ fn snow(rgb: Rgba<u8>) -> Rgba<u8> {
 
 async fn animate_snow(
     image: &DynamicImage,
-    rows: u16,
-    cols: u16,
+    mut rows: u16,
+    mut cols: u16,
     intensity: Intensity,
     is_grayscale: bool,
     weather_rx: &mut Receiver<String>,
     exit_rx: &mut Receiver<bool>,
+    resize_rx: &mut Receiver<()>,
 ) -> Result<()> {
-    let mut particles: Vec<Particle> = Vec::new();
-    let mut rng = rand::thread_rng();
-    let delay = Duration::from_millis(intensity.delay_ms());
-    let spawn_prob = intensity.spawn_probability();
-    let mut last_frame = Instant::now();
-
-    let resized = image.resize_exact(
-        cols as u32,
-        rows.saturating_sub(2) as u32 * 2,
-        image::imageops::FilterType::Lanczos3,
-    );
-    let resized = if is_grayscale {
-        image::DynamicImage::ImageLuma8(grayscale(&resized))
-    } else {
-        resized
-    };
-
     loop {
-        if *exit_rx.borrow() {
-            break;
-        }
+        let mut particles: Vec<Particle> = Vec::new();
+        let mut rng = rand::thread_rng();
+        let delay = Duration::from_millis(intensity.delay_ms());
+        let spawn_prob = intensity.spawn_probability();
+        let mut last_frame = Instant::now();
 
-        if rng.gen_bool(spawn_prob) {
-            let x = rng.gen_range(0..cols);
-            particles.push(Particle { x, y: 0 });
-        }
+        let resized = image.resize_exact(
+            cols as u32,
+            rows.saturating_sub(2) as u32 * 2,
+            image::imageops::FilterType::Lanczos3,
+        );
+        let resized = if is_grayscale {
+            image::DynamicImage::ImageLuma8(grayscale(&resized))
+        } else {
+            resized
+        };
 
-        particles.retain_mut(|p| {
-            p.y += 1;
-            if rng.gen_bool(0.4) {
-                p.x = (p.x as i16 + rng.gen_range(-1..=1)).clamp(0, cols as i16 - 1) as u16;
+        loop {
+            if *exit_rx.borrow() {
+                return Ok(());
             }
-            p.y < rows.saturating_sub(2)
-        });
+
+            if resize_rx.has_changed().unwrap_or(false) {
+                let (new_cols, new_rows) = get_terminal_size();
+                if new_cols != cols || new_rows != rows {
+                    cols = new_cols;
+                    rows = new_rows;
+                    execute!(
+                        io::stdout(),
+                        crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
+                    )?;
+                    break;
+                }
+            }
+
+            if rng.gen_bool(spawn_prob) {
+                let x = rng.gen_range(0..cols);
+                particles.push(Particle { x, y: 0 });
+            }
+
+            particles.retain_mut(|p| {
+                p.y += 1;
+                if rng.gen_bool(0.4) {
+                    p.x = (p.x as i16 + rng.gen_range(-1..=1)).clamp(0, cols as i16 - 1) as u16;
+                }
+                p.y < rows.saturating_sub(2)
+            });
+
+            let ws = weather_rx.borrow().clone();
+
+            io::stdout()
+                .queue(MoveTo(0, 0))?
+                .queue(PrintStyledContent(ws.as_str().reset()))?;
+
+            for term_y in 0..rows.saturating_sub(2) as u32 {
+                io::stdout().queue(MoveTo(0, (term_y + 2) as u16))?;
+
+                for x in 0..cols as u32 {
+                    let top = resized.get_pixel(x, term_y * 2);
+                    let bot = resized.get_pixel(x, term_y * 2 + 1);
+                    let is_snowing = particles
+                        .iter()
+                        .any(|p| p.x as u32 == x && p.y as u32 == term_y);
+
+                    let top = if is_snowing { snow(top) } else { top };
+                    let bot = if is_snowing { snow(bot) } else { bot };
+
+                    draw_pixel(top, bot)?;
+                }
+                io::stdout().queue(ResetColor)?;
+            }
+
+            io::stdout().flush()?;
+
+            let elapsed = last_frame.elapsed();
+            if elapsed < delay {
+                sleep(delay - elapsed).await;
+            }
+            last_frame = Instant::now();
+        }
+    }
+}
+
+#[inline]
+fn flash(rgb: Rgba<u8>) -> Rgba<u8> {
+    let r = (rgb[0] as u16 + 150).min(255) as u8;
+    let g = (rgb[1] as u16 + 150).min(255) as u8;
+    let b = (rgb[2] as u16 + 100).min(255) as u8;
+    Rgba([r, g, b, rgb[3]])
+}
+
+#[inline]
+fn storm(rgb: Rgba<u8>) -> Rgba<u8> {
+    let r = (rgb[0] as u16 + 60).min(255) as u8;
+    let g = (rgb[1] as u16 + 100).min(255) as u8;
+    let b = (rgb[2] as u16 + 180).min(255) as u8;
+    Rgba([r, g, b, rgb[3]])
+}
+
+async fn animate_thunderstorm(
+    image: &DynamicImage,
+    mut rows: u16,
+    mut cols: u16,
+    intensity: Intensity,
+    is_grayscale: bool,
+    weather_rx: &mut Receiver<String>,
+    exit_rx: &mut Receiver<bool>,
+    resize_rx: &mut Receiver<()>,
+) -> Result<()> {
+    loop {
+        let mut particles: Vec<Particle> = Vec::new();
+        let mut rng = rand::thread_rng();
+        let delay = Duration::from_millis(intensity.delay_ms());
+        let spawn_prob = intensity.spawn_probability().min(0.9);
+        let mut last_frame = Instant::now();
+        let mut flash_counter = 0;
+        let flash_interval = 40;
+
+        let resized = image.resize_exact(
+            cols as u32,
+            rows.saturating_sub(2) as u32 * 2,
+            image::imageops::FilterType::Lanczos3,
+        );
+        let resized = if is_grayscale {
+            image::DynamicImage::ImageLuma8(grayscale(&resized))
+        } else {
+            resized
+        };
+
+        loop {
+            if *exit_rx.borrow() {
+                return Ok(());
+            }
+
+            if resize_rx.has_changed().unwrap_or(false) {
+                let (new_cols, new_rows) = get_terminal_size();
+                if new_cols != cols || new_rows != rows {
+                    cols = new_cols;
+                    rows = new_rows;
+                    execute!(
+                        io::stdout(),
+                        crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
+                    )?;
+                    break;
+                }
+            }
+
+            if rng.gen_bool(spawn_prob) {
+                let x = rng.gen_range(0..cols);
+                particles.push(Particle { x, y: 0 });
+            }
+
+            let speed = match intensity {
+                Intensity::Light => 1,
+                Intensity::Moderate => 2,
+                Intensity::Heavy => 4,
+            };
+
+            particles.retain_mut(|p| {
+                p.y += speed;
+                p.y < rows.saturating_sub(2)
+            });
+
+            let should_flash = flash_counter % flash_interval == 0 && rng.gen_bool(0.15);
+
+            let ws = weather_rx.borrow().clone();
+
+            let weather_str = if should_flash {
+                ws.as_str().with(Color::Rgb {
+                    r: 255,
+                    g: 255,
+                    b: 150,
+                })
+            } else {
+                ws.as_str().reset()
+            };
+
+            io::stdout()
+                .queue(MoveTo(0, 0))?
+                .queue(PrintStyledContent(weather_str))?;
+
+            for term_y in 0..rows.saturating_sub(2) as u32 {
+                io::stdout().queue(MoveTo(0, (term_y + 2) as u16))?;
+
+                for x in 0..cols as u32 {
+                    let top = resized.get_pixel(x, term_y * 2);
+                    let bot = resized.get_pixel(x, term_y * 2 + 1);
+
+                    let is_storming = particles
+                        .iter()
+                        .any(|p| p.x as u32 == x && p.y as u32 == term_y);
+
+                    let top = if should_flash {
+                        flash(top)
+                    } else if is_storming {
+                        storm(top)
+                    } else {
+                        top
+                    };
+                    let bot = if should_flash {
+                        flash(bot)
+                    } else if is_storming {
+                        storm(bot)
+                    } else {
+                        bot
+                    };
+                    draw_pixel(top, bot)?;
+                }
+                io::stdout().queue(ResetColor)?;
+            }
+
+            io::stdout().flush()?;
+            flash_counter += 1;
+
+            let elapsed = last_frame.elapsed();
+            if elapsed < delay {
+                sleep(delay - elapsed).await;
+            }
+            last_frame = Instant::now();
+        }
+    }
+}
+
+async fn print_static(
+    image: &DynamicImage,
+    is_grayscale: bool,
+    weather_rx: &mut Receiver<String>,
+    exit_rx: &mut Receiver<bool>,
+    resize_rx: &mut Receiver<()>,
+) -> Result<()> {
+    loop {
+        let (cols, rows) = get_terminal_size();
+        let resized = image.resize_exact(
+            cols as u32,
+            rows.saturating_sub(2) as u32 * 2,
+            image::imageops::FilterType::Lanczos3,
+        );
+        let resized = if is_grayscale {
+            image::DynamicImage::ImageLuma8(grayscale(&resized))
+        } else {
+            resized
+        };
 
         let ws = weather_rx.borrow().clone();
 
@@ -287,13 +524,6 @@ async fn animate_snow(
             for x in 0..cols as u32 {
                 let top = resized.get_pixel(x, term_y * 2);
                 let bot = resized.get_pixel(x, term_y * 2 + 1);
-                let is_snowing = particles
-                    .iter()
-                    .any(|p| p.x as u32 == x && p.y as u32 == term_y);
-
-                let top = if is_snowing { snow(top) } else { top };
-                let bot = if is_snowing { snow(bot) } else { bot };
-
                 draw_pixel(top, bot)?;
             }
             io::stdout().queue(ResetColor)?;
@@ -301,189 +531,26 @@ async fn animate_snow(
 
         io::stdout().flush()?;
 
-        let elapsed = last_frame.elapsed();
-        if elapsed < delay {
-            sleep(delay - elapsed).await;
-        }
-        last_frame = Instant::now();
-    }
-
-    Ok(())
-}
-
-#[inline]
-fn flash(rgb: Rgba<u8>) -> Rgba<u8> {
-    let r = (rgb[0] as u16 + 150).min(255) as u8;
-    let g = (rgb[1] as u16 + 150).min(255) as u8;
-    let b = (rgb[2] as u16 + 100).min(255) as u8;
-    Rgba([r, g, b, 255])
-}
-
-#[inline]
-fn storm(rgb: Rgba<u8>, is_raining: bool) -> Rgba<u8> {
-    if is_raining {
-        let a = ((rgb[0] as u16 + rgb[1] as u16 + rgb[2] as u16) / 3) as u8;
-        return Rgba([a, a, a, rgb[3]]);
-    }
-
-    let r = (rgb[0] as u16 + 60).min(255) as u8;
-    let g = (rgb[1] as u16 + 100).min(255) as u8;
-    let b = (rgb[2] as u16 + 180).min(255) as u8;
-    Rgba([r, g, b, rgb[3]])
-}
-
-async fn animate_thunderstorm(
-    image: &DynamicImage,
-    rows: u16,
-    cols: u16,
-    intensity: Intensity,
-    is_grayscale: bool,
-    weather_rx: &mut Receiver<String>,
-    exit_rx: &mut Receiver<bool>,
-) -> Result<()> {
-    let mut particles: Vec<Particle> = Vec::new();
-    let mut rng = rand::thread_rng();
-    let delay = Duration::from_millis(intensity.delay_ms());
-    let spawn_prob = intensity.spawn_probability().min(0.9);
-    let mut last_frame = Instant::now();
-    let mut flash_counter = 0;
-    let flash_interval = 40;
-
-    let resized = image.resize_exact(
-        cols as u32,
-        rows.saturating_sub(2) as u32 * 2,
-        image::imageops::FilterType::Lanczos3,
-    );
-    let resized = if is_grayscale {
-        image::DynamicImage::ImageLuma8(grayscale(&resized))
-    } else {
-        resized
-    };
-
-    loop {
-        if *exit_rx.borrow() {
-            break;
-        }
-
-        if rng.gen_bool(spawn_prob) {
-            let x = rng.gen_range(0..cols);
-            particles.push(Particle { x, y: 0 });
-        }
-
-        let speed = match intensity {
-            Intensity::Light => 1,
-            Intensity::Moderate => 2,
-            Intensity::Heavy => 4,
-        };
-
-        particles.retain_mut(|p| {
-            p.y += speed;
-            p.y < rows.saturating_sub(2)
-        });
-
-        let should_flash = flash_counter % flash_interval == 0 && rng.gen_bool(0.15);
-
-        execute!(io::stdout(), crossterm::cursor::MoveTo(0, 0))?;
-
-        let ws = weather_rx.borrow().clone();
-
-        let weather_str = if should_flash {
-            ws.as_str().with(Color::Rgb {
-                r: 255,
-                g: 255,
-                b: 150,
-            })
-        } else {
-            ws.as_str().reset()
-        };
-
-        io::stdout().queue(PrintStyledContent(weather_str))?;
-
-        for term_y in 0..rows.saturating_sub(2) as u32 {
-            io::stdout().queue(MoveTo(0, (term_y + 2) as u16))?;
-
-            for x in 0..cols as u32 {
-                let top = resized.get_pixel(x, term_y * 2);
-                let bot = resized.get_pixel(x, term_y * 2 + 1);
-
-                let top = if should_flash { flash(top) } else { top };
-                let bot = if should_flash { flash(bot) } else { bot };
-
-                let is_raining = particles
-                    .iter()
-                    .any(|p| p.x as u32 == x && p.y as u32 == term_y);
-
-                let top = storm(top, is_raining);
-                let bot = storm(bot, is_raining);
-                draw_pixel(top, bot)?;
-            }
-            io::stdout().queue(ResetColor)?;
-        }
-
-        io::stdout().flush()?;
-        flash_counter += 1;
-
-        let elapsed = last_frame.elapsed();
-        if elapsed < delay {
-            sleep(delay - elapsed).await;
-        }
-        last_frame = Instant::now();
-    }
-
-    Ok(())
-}
-
-async fn print_static(
-    image: &DynamicImage,
-    is_grayscale: bool,
-    weather_rx: &mut Receiver<String>,
-    exit_rx: &mut Receiver<bool>,
-) -> Result<()> {
-    let (cols, rows) = get_terminal_size();
-    let resized = image.resize_exact(
-        cols as u32,
-        rows.saturating_sub(2) as u32 * 2,
-        image::imageops::FilterType::Lanczos3,
-    );
-    let resized = if is_grayscale {
-        image::DynamicImage::ImageLuma8(grayscale(&resized))
-    } else {
-        resized
-    };
-
-    let ws = weather_rx.borrow().clone();
-
-    io::stdout()
-        .queue(MoveTo(0, 0))?
-        .queue(PrintStyledContent(ws.as_str().reset()))?;
-
-    for term_y in 0..rows.saturating_sub(2) as u32 {
-        io::stdout().queue(MoveTo(0, (term_y + 2) as u16))?;
-
-        for x in 0..cols as u32 {
-            let top = resized.get_pixel(x, term_y * 2);
-            let bot = resized.get_pixel(x, term_y * 2 + 1);
-            draw_pixel(top, bot)?;
-        }
-        io::stdout().queue(ResetColor)?;
-    }
-
-    io::stdout().flush()?;
-
-    loop {
-        tokio::select! {
-            _ = exit_rx.changed() => { if *exit_rx.borrow() { break; } }
-            _ = weather_rx.changed() => {
-                let ws = weather_rx.borrow().clone();
-                io::stdout()
-                    .queue(MoveTo(0, 0))?
-                    .queue(PrintStyledContent(ws.as_str().reset()))?;
-                io::stdout().flush()?;
+        loop {
+            tokio::select! {
+                _ = exit_rx.changed() => { if *exit_rx.borrow() { return Ok(()); } }
+                _ = weather_rx.changed() => {
+                    let ws = weather_rx.borrow().clone();
+                    io::stdout()
+                        .queue(MoveTo(0, 0))?
+                        .queue(PrintStyledContent(ws.as_str().reset()))?;
+                    io::stdout().flush()?;
+                }
+                _ = resize_rx.changed() => {
+                    let (new_cols, new_rows) = get_terminal_size();
+                    if new_cols != cols || new_rows != rows {
+                        execute!(io::stdout(), crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?;
+                        break;
+                    }
+                }
             }
         }
     }
-
-    Ok(())
 }
 
 #[inline]

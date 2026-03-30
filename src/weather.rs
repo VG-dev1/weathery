@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -24,20 +24,10 @@ struct CurrentWeather {
     weathercode: u32,
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Units {
     Metric,
     Imperial,
-}
-
-impl Units {
-    pub fn toggle(self) -> Self {
-        match self {
-            Units::Metric => Units::Imperial,
-            Units::Imperial => Units::Metric,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -73,9 +63,13 @@ pub async fn get_weather(city: &str, simulate_code: Option<u32>) -> Result<Weath
     let geo: GeoResponse = client
         .get("https://geocoding-api.open-meteo.com/v1/search")
         .query(&[("name", city), ("count", "1")])
-        .send().await?.json().await?;
+        .send()
+        .await?
+        .json()
+        .await?;
 
-    let location = geo.results
+    let location = geo
+        .results
         .and_then(|r| r.into_iter().next())
         .ok_or_else(|| anyhow!("Weather location not found for '{city}'"))?;
 
@@ -86,11 +80,13 @@ pub async fn get_weather(city: &str, simulate_code: Option<u32>) -> Result<Weath
             ("longitude", location.longitude.to_string()),
             ("current_weather", "true".to_string()),
         ])
-        .send().await?.json().await?;
+        .send()
+        .await?
+        .json()
+        .await?;
 
     let cw = weather.current_weather;
     let weathercode = simulate_code.unwrap_or(cw.weathercode);
-    // let desc = weather_description(simulate_code.unwrap_or(cw.weathercode));
 
     Ok(WeatherData {
         city: city.to_string(),
