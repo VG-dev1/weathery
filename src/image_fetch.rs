@@ -14,6 +14,21 @@ struct WikiQuery {
 }
 
 #[derive(Deserialize)]
+struct WikiSearchResponse {
+    query: WikiSearchQuery,
+}
+
+#[derive(Deserialize)]
+struct WikiSearchQuery {
+    search: Vec<WikiSearchItem>,
+}
+
+#[derive(Deserialize)]
+struct WikiSearchItem {
+    title: String,
+}
+
+#[derive(Deserialize)]
 struct WikiPage {
     thumbnail: Option<WikiThumbnail>,
 }
@@ -28,12 +43,40 @@ pub async fn get_city_image_url(city: &str) -> Result<Option<String>> {
         .user_agent("weathery/1.0 (contact@example.com)")
         .build()?;
 
+    if let Some(url) = get_thumbnail_for_title(&client, city).await? {
+        return Ok(Some(url));
+    }
+
+    let search: WikiSearchResponse = client
+        .get("https://en.wikipedia.org/w/api.php")
+        .query(&[
+            ("action", "query"),
+            ("format", "json"),
+            ("list", "search"),
+            ("srsearch", city),
+            ("srlimit", "8"),
+        ])
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    for item in search.query.search {
+        if let Some(url) = get_thumbnail_for_title(&client, &item.title).await? {
+            return Ok(Some(url));
+        }
+    }
+
+    Ok(None)
+}
+
+async fn get_thumbnail_for_title(client: &reqwest::Client, title: &str) -> Result<Option<String>> {
     let response: WikiResponse = client
         .get("https://en.wikipedia.org/w/api.php")
         .query(&[
             ("action", "query"),
             ("format", "json"),
-            ("titles", city),
+            ("titles", title),
             ("prop", "pageimages"),
             ("piprop", "thumbnail"),
             ("pithumbsize", "1000"),

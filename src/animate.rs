@@ -21,23 +21,6 @@ pub enum Weather {
     Thunderstorm,
 }
 
-impl Weather {
-    pub fn from_str(weather_str: &str) -> Self {
-        if weather_str.contains("rain")
-            || weather_str.contains("drizzle")
-            || weather_str.contains("rain showers")
-        {
-            Weather::Rain
-        } else if weather_str.contains("snow") || weather_str.contains("Snow") {
-            Weather::Snow
-        } else if weather_str.contains("Thunderstorm") {
-            Weather::Thunderstorm
-        } else {
-            Weather::Clear
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 struct Particle {
     x: u16,
@@ -82,6 +65,7 @@ pub async fn animate_weather(
     mut exit_rx: Receiver<bool>,
     mut resize_rx: Receiver<()>,
     is_grayscale: bool,
+    is_night: bool,
 ) -> Result<()> {
     let (cols, rows) = get_terminal_size();
 
@@ -101,12 +85,17 @@ pub async fn animate_weather(
     };
 
     let result = match weather {
-        Weather::Rain => animate_rain(image, rows, cols, intensity, is_grayscale, &mut ctx).await,
-        Weather::Snow => animate_snow(image, rows, cols, intensity, is_grayscale, &mut ctx).await,
-        Weather::Thunderstorm => {
-            animate_thunderstorm(image, rows, cols, intensity, is_grayscale, &mut ctx).await
+        Weather::Rain => {
+            animate_rain(image, rows, cols, intensity, is_grayscale, is_night, &mut ctx).await
         }
-        Weather::Clear => print_static(image, is_grayscale, &mut ctx).await,
+        Weather::Snow => {
+            animate_snow(image, rows, cols, intensity, is_grayscale, is_night, &mut ctx).await
+        }
+        Weather::Thunderstorm => {
+            animate_thunderstorm(image, rows, cols, intensity, is_grayscale, is_night, &mut ctx)
+                .await
+        }
+        Weather::Clear => print_static(image, is_grayscale, is_night, &mut ctx).await,
     };
 
     execute!(io::stdout(), EnableLineWrap, LeaveAlternateScreen, Show)?;
@@ -123,12 +112,41 @@ fn rain(rgb: Rgba<u8>) -> Rgba<u8> {
     Rgba([r, g, b, rgb[3]])
 }
 
+#[inline]
+fn night_tint(rgb: Rgba<u8>) -> Rgba<u8> {
+    let r = (rgb[0] as f32 * 0.35) as u8;
+    let g = (rgb[1] as f32 * 0.40) as u8;
+    let b = ((rgb[2] as f32 * 0.60) + 18.0).min(255.0) as u8;
+    Rgba([r, g, b, rgb[3]])
+}
+
+#[inline]
+fn star_glow(rgb: Rgba<u8>) -> Rgba<u8> {
+    let r = (rgb[0] as u16 + 140).min(255) as u8;
+    let g = (rgb[1] as u16 + 140).min(255) as u8;
+    let b = (rgb[2] as u16 + 120).min(255) as u8;
+    Rgba([r, g, b, rgb[3]])
+}
+
+#[inline]
+fn has_star(x: u32, y: u32) -> bool {
+    let base = x.wrapping_mul(73_856_093) ^ y.wrapping_mul(19_349_663);
+    base % 367 == 0
+}
+
+#[inline]
+fn star_twinkles(x: u32, y: u32, frame: u64) -> bool {
+    let base = x.wrapping_mul(73_856_093) ^ y.wrapping_mul(19_349_663);
+    ((base / 367) + frame as u32) % 10 == 0
+}
+
 async fn animate_rain(
     image: &DynamicImage,
     mut rows: u16,
     mut cols: u16,
     intensity: Intensity,
     is_grayscale: bool,
+    is_night: bool,
     ctx: &mut AnimationContext<'_>,
 ) -> Result<()> {
     loop {
@@ -198,6 +216,8 @@ async fn animate_rain(
                     let is_raining = particles
                         .iter()
                         .any(|p| p.x as u32 == x && p.y as u32 == term_y);
+                    let top = if is_night { night_tint(top) } else { top };
+                    let bot = if is_night { night_tint(bot) } else { bot };
                     let top = if is_raining { rain(top) } else { top };
                     let bot = if is_raining { rain(bot) } else { bot };
                     draw_pixel(top, bot)?;
@@ -231,6 +251,7 @@ async fn animate_snow(
     mut cols: u16,
     intensity: Intensity,
     is_grayscale: bool,
+    is_night: bool,
     ctx: &mut AnimationContext<'_>,
 ) -> Result<()> {
     loop {
@@ -298,6 +319,8 @@ async fn animate_snow(
                         .iter()
                         .any(|p| p.x as u32 == x && p.y as u32 == term_y);
 
+                    let top = if is_night { night_tint(top) } else { top };
+                    let bot = if is_night { night_tint(bot) } else { bot };
                     let top = if is_snowing { snow(top) } else { top };
                     let bot = if is_snowing { snow(bot) } else { bot };
 
@@ -339,6 +362,7 @@ async fn animate_thunderstorm(
     mut cols: u16,
     intensity: Intensity,
     is_grayscale: bool,
+    is_night: bool,
     ctx: &mut AnimationContext<'_>,
 ) -> Result<()> {
     loop {
@@ -424,6 +448,9 @@ async fn animate_thunderstorm(
                         .iter()
                         .any(|p| p.x as u32 == x && p.y as u32 == term_y);
 
+                    let top = if is_night { night_tint(top) } else { top };
+                    let bot = if is_night { night_tint(bot) } else { bot };
+
                     let top = if should_flash {
                         flash(top)
                     } else if is_storming {
@@ -458,8 +485,13 @@ async fn animate_thunderstorm(
 async fn print_static(
     image: &DynamicImage,
     is_grayscale: bool,
+    is_night: bool,
     ctx: &mut AnimationContext<'_>,
 ) -> Result<()> {
+    if is_night {
+        return animate_clear_night(image, is_grayscale, ctx).await;
+    }
+
     loop {
         let (cols, rows) = get_terminal_size();
         let resized = image.resize_exact(
@@ -508,6 +540,76 @@ async fn print_static(
                         execute!(io::stdout(), crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?;
                         break;
                     }
+                }
+            }
+        }
+    }
+}
+
+async fn animate_clear_night(
+    image: &DynamicImage,
+    is_grayscale: bool,
+    ctx: &mut AnimationContext<'_>,
+) -> Result<()> {
+    let mut frame: u64 = 0;
+
+    loop {
+        let (cols, rows) = get_terminal_size();
+        let resized = image.resize_exact(
+            cols as u32,
+            rows.saturating_sub(2) as u32 * 2,
+            image::imageops::FilterType::Lanczos3,
+        );
+        let resized = if is_grayscale {
+            image::DynamicImage::ImageLuma8(grayscale(&resized))
+        } else {
+            resized
+        };
+
+        loop {
+            if *ctx.exit_rx.borrow() {
+                return Ok(());
+            }
+
+            let ws = ctx.weather_rx.borrow().clone();
+            io::stdout()
+                .queue(MoveTo(0, 0))?
+                .queue(PrintStyledContent(ws.as_str().with(Color::DarkGrey)))?;
+
+            for term_y in 0..rows.saturating_sub(2) as u32 {
+                io::stdout().queue(MoveTo(0, (term_y + 2) as u16))?;
+
+                for x in 0..cols as u32 {
+                    let mut top = night_tint(resized.get_pixel(x, term_y * 2));
+                    let mut bot = night_tint(resized.get_pixel(x, term_y * 2 + 1));
+
+                    if has_star(x, term_y) {
+                        if star_twinkles(x, term_y, frame) {
+                            top = star_glow(top);
+                            bot = star_glow(bot);
+                        } else {
+                            top = star_glow(top);
+                        }
+                    }
+
+                    draw_pixel(top, bot)?;
+                }
+                io::stdout().queue(ResetColor)?;
+            }
+
+            io::stdout().flush()?;
+            frame = frame.wrapping_add(1);
+
+            sleep(Duration::from_millis(110)).await;
+
+            if ctx.resize_rx.has_changed().unwrap_or(false) {
+                let (new_cols, new_rows) = get_terminal_size();
+                if new_cols != cols || new_rows != rows {
+                    execute!(
+                        io::stdout(),
+                        crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
+                    )?;
+                    break;
                 }
             }
         }
