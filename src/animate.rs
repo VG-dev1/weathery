@@ -541,11 +541,13 @@ async fn animate_thunderstorm(
                     let mut lightning_intensity = 0.0f32;
                     for bolt in &lightning_bolts {
                         if let Some((bolt_x, bolt_y)) = bolt.points.get(term_y as usize)
-                            && (*bolt_x as i16 - x as i16).abs() <= 1 && *bolt_y == term_y as u16 {
-                                on_lightning = true;
-                                lightning_intensity =
-                                    (bolt.max_age - bolt.age) as f32 / bolt.max_age as f32;
-                            }
+                            && (*bolt_x as i16 - x as i16).abs() <= 1
+                            && *bolt_y == term_y as u16
+                        {
+                            on_lightning = true;
+                            lightning_intensity =
+                                (bolt.max_age - bolt.age) as f32 / bolt.max_age as f32;
+                        }
                     }
 
                     let top = if is_night { night_tint(top) } else { top };

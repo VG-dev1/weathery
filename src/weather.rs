@@ -80,10 +80,11 @@ pub async fn get_weather(city: &str, simulate_code: Option<u32>) -> Result<Weath
             .await?;
 
         if let Some(results) = geo.results
-            && !results.is_empty() {
-                locations = Some(results);
-                break;
-            }
+            && !results.is_empty()
+        {
+            locations = Some(results);
+            break;
+        }
     }
 
     let locations = locations.ok_or_else(|| anyhow!("Weather location not found for '{city}'"))?;
@@ -149,9 +150,10 @@ fn build_geo_queries(query: &str) -> Vec<String> {
         .collect();
 
     if let Some(city_only) = parts.first()
-        && !city_only.is_empty() {
-            ordered.push((*city_only).to_string());
-        }
+        && !city_only.is_empty()
+    {
+        ordered.push((*city_only).to_string());
+    }
 
     let mut seen = HashSet::new();
     let mut queries = Vec::new();
@@ -197,14 +199,16 @@ fn format_location_name(location: &GeoResult) -> String {
     let mut parts = vec![location.name.clone()];
 
     if let Some(admin1) = location.admin1.as_deref()
-        && !admin1.is_empty() {
-            parts.push(admin1.to_string());
-        }
+        && !admin1.is_empty()
+    {
+        parts.push(admin1.to_string());
+    }
 
     if let Some(country) = location.country.as_deref()
-        && !country.is_empty() {
-            parts.push(country.to_string());
-        }
+        && !country.is_empty()
+    {
+        parts.push(country.to_string());
+    }
 
     parts.join(", ")
 }
