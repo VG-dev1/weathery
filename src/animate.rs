@@ -164,13 +164,13 @@ fn star_glow(rgb: Rgba<u8>) -> Rgba<u8> {
 #[inline]
 fn has_star(x: u32, y: u32) -> bool {
     let base = x.wrapping_mul(73_856_093) ^ y.wrapping_mul(19_349_663);
-    base % 367 == 0
+    base.is_multiple_of(367)
 }
 
 #[inline]
 fn star_twinkles(x: u32, y: u32, frame: u64) -> bool {
     let base = x.wrapping_mul(73_856_093) ^ y.wrapping_mul(19_349_663);
-    ((base / 367) + frame as u32) % 10 == 0
+    ((base / 367) + frame as u32).is_multiple_of(10)
 }
 
 async fn animate_rain(
@@ -540,13 +540,12 @@ async fn animate_thunderstorm(
                     let mut on_lightning = false;
                     let mut lightning_intensity = 0.0f32;
                     for bolt in &lightning_bolts {
-                        if let Some((bolt_x, bolt_y)) = bolt.points.get(term_y as usize) {
-                            if (*bolt_x as i16 - x as i16).abs() <= 1 && *bolt_y == term_y as u16 {
+                        if let Some((bolt_x, bolt_y)) = bolt.points.get(term_y as usize)
+                            && (*bolt_x as i16 - x as i16).abs() <= 1 && *bolt_y == term_y as u16 {
                                 on_lightning = true;
                                 lightning_intensity =
                                     (bolt.max_age - bolt.age) as f32 / bolt.max_age as f32;
                             }
-                        }
                     }
 
                     let top = if is_night { night_tint(top) } else { top };
