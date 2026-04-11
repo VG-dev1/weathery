@@ -6,13 +6,13 @@
 
 weathery is a terminal weather app with dynamically animated ANSI cityscapes.
 
-It fetches a cityscape from Wikipedia, renders it in ANSI art, fetches the weather from Open Meteo, and adds animations according to the weather and the intensity of the weather.
+It fetches a cityscape from Wikipedia, renders it in ANSI art, pulls live weather from Open Meteo, and layers on animations that respond to weather type, intensity, and time of day.
 
 ## Demo
 
-### Copenhagen (heavy rain)
+### Stockholm (thunderstorm with heavy hail)
 
-![Copenhagen heavy rain demo](assets/copenhagen-heavy-rain.gif)
+![Stockholm thunderstorm demo](assets/stockholm-thunderstorm-night.gif)
 
 ## Installation
 
@@ -37,13 +37,18 @@ cargo install --path .
 - Different animation appearance depending on the weather condition
     - Rain: blue ANSI blocks that fall down
     - Snow: white ANSI blocks that fall down
-    - Thunderstorm: same blue rain blocks as regular rain but much faster and denser, combined with periodic lightning flashes
+    - Thunderstorm: same blue rain blocks as regular rain but much faster and denser, combined with periodic lightning flashes and thunderbolts
     - Clear: static image with no particles or effects
+    - Fog: grayscale image; no fog: colorful image
+        - This can be overriden with `--grayscale` and `--colorful` flags
 - Different speed of droplets depending on the intensity of the weather
     - Light intensity: slower spawn rate and slower particle movement
     - Moderate intensity: medium spawn rate and speed
     - Heavy intensity: rapid spawning and fast particles
-- In case of foggy weather, the image is grayscale; otherwise it's colorful (this can be overriden with `--grayscale` and `--colorful` flags)
+- Different animation appearance depedning on the time of the day
+    - Day: bright image
+    - Night: dark image with stars
+    - This can be overriden with `--day` and `--night` flags
 - Frame timing stays consistent across all weather types by measuring elapsed time and sleeping just enough to hit the target frame rate, ensuring smooth animation regardless of terminal speed
 
 ## CLI Options
@@ -51,69 +56,83 @@ cargo install --path .
 ### Simulate weather conditions
 
 ```bash
+# Thunderstorm with heavy hail
+weathery "Stockholm" --simulate 99
+
 # Heavy rain
-weathery "Copenhagen" --simulate 65
+weathery "Stockholm" --simulate 65
 
 # Clear
-weathery "Copenhagen" --simulate 0
+weathery "Stockholm" --simulate 0
 ```
 
-Weather codes:
+## Weather Codes
 
-```rust
-0 => "☀️ Clear sky",
-1 => "🌤 Mainly clear",
-2 => "⛅ Partly cloudy",
-3 => "☁️ Overcast",
-45 => "🌫 Foggy",
-48 => "🌫 Depositing rime fog",
-51 => "🌧 Light drizzle",
-53 => "🌧 Moderate drizzle",
-55 => "🌧 Dense drizzle",
-61 => "🌧 Slight rain",
-63 => "🌧 Moderate rain",
-65 => "🌧 Heavy rain",
-71 => "❄️ Slight snow",
-73 => "❄️ Moderate snow",
-75 => "❄️ Heavy snow",
-77 => "❄️ Snow grains",
-80 => "🌧 Slight rain showers",
-81 => "🌧 Moderate rain showers",
-82 => "🌧 Violent rain showers",
-85 => "❄️ Slight snow showers",
-86 => "❄️ Heavy snow showers",
-95 => "⛈ Thunderstorm (slight/moderate)",
-96 => "⛈ Thunderstorm with slight hail",
-99 => "⛈ Thunderstorm with heavy hail",
-```
+The `--simulate` flag accepts any of the following codes to preview different weather conditions and their corresponding animations:
+
+| Code | Condition | Animation |
+|------|-----------|-----------|
+| 0 | ☀️ Clear sky | Static, no particles |
+| 1 | 🌤 Mainly clear | Static, no particles |
+| 2 | ⛅ Partly cloudy | Static, no particles |
+| 3 | ☁️ Overcast | Static, no particles |
+| 45 | 🌫 Foggy | Grayscale rendering |
+| 48 | 🌫 Depositing rime fog | Grayscale rendering |
+| 51 | 🌧 Light drizzle | Slow falling droplets |
+| 53 | 🌧 Moderate drizzle | Medium falling droplets |
+| 55 | 🌧 Dense drizzle | Fast falling droplets |
+| 61 | 🌧 Slight rain | Slow falling droplets |
+| 63 | 🌧 Moderate rain | Medium falling droplets |
+| 65 | 🌧 Heavy rain | Fast falling droplets |
+| 71 | ❄️ Slight snow | Slow falling snow |
+| 73 | ❄️ Moderate snow | Medium falling snow |
+| 75 | ❄️ Heavy snow | Fast falling snow |
+| 77 | ❄️ Snow grains | Fast falling snow |
+| 80 | 🌧 Slight rain showers | Slow falling droplets |
+| 81 | 🌧 Moderate rain showers | Medium falling droplets |
+| 82 | 🌧 Violent rain showers | Fast falling droplets |
+| 85 | ❄️ Slight snow showers | Slow falling snow |
+| 86 | ❄️ Heavy snow showers | Fast falling snow |
+| 95 | ⛈ Thunderstorm (slight/moderate) | Fast particles + lightning |
+| 96 | ⛈ Thunderstorm with slight hail | Fast particles + lightning |
+| 99 | ⛈ Thunderstorm with heavy hail | Fast particles + lightning |
 
 ### Force colorful/grayscale image
 
 ```bash
 # Colorful
-weathery "Copenhagen" --colorful
+weathery "Stockholm" --colorful
 
 # Grayscale
-weathery "Copenhagen" --grayscale
+weathery "Stockholm" --grayscale
+```
+
+### Force day/night mode (bright/dark image)
+
+```bash
+# Day
+weathery "Stockholm" --day
+
+# Night
+weathery "Stockholm" --night
 ```
 
 ### Use imperial units
 
 ```bash
-weathery "Copenhagen" --imperial
+weathery "Stockholm" --imperial
 ```
 
 ## Keyboard controls
 
 - `q` - Quit
-- `u` - Toggle units
 
 ## Roadmap
 
 - [ ] More key bindings
 - [x] Imperial unit
 - [ ] Auto-detect user's location
-- [ ] More animation settings
+- [x] More animation settings
 - [ ] Installation via other package managers
 
 More coming soon!
