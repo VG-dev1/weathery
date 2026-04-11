@@ -16,6 +16,15 @@ use crossterm::{
 };
 use std::time::Duration;
 
+fn weather_from_code(code: u32) -> Weather {
+    match code {
+        51 | 53 | 55 | 61 | 63 | 65 | 80 | 81 | 82 => Weather::Rain,
+        71 | 73 | 75 | 77 | 85 | 86 => Weather::Snow,
+        95 | 96 | 99 => Weather::Thunderstorm,
+        _ => Weather::Clear,
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "weathery",
@@ -42,6 +51,14 @@ struct Args {
     /// Simulate a specific weather condition
     #[arg(long)]
     simulate: Option<u32>,
+
+    /// Simulate day
+    #[arg(long)]
+    day: bool,
+
+    /// Simulate night
+    #[arg(long)]
+    night: bool,
 }
 
 #[tokio::main]
@@ -53,13 +70,25 @@ async fn main() -> Result<()> {
         std::process::exit(1);
     }
 
-    let (image_url, weather_data) =
-        tokio::try_join!(get_city_image_url(&city), get_weather(&city, args.simulate))?;
+    let mut weather_data = get_weather(&city, args.simulate).await?;
+    let image_url = get_city_image_url(&weather_data.city).await?;
+    let image_url = if image_url.is_none() && weather_data.city != city {
+        get_city_image_url(&city).await?
+    } else {
+        image_url
+    };
 
     let Some(url) = image_url else {
         eprintln!("Error: Could not find city: '{city}'.");
         std::process::exit(1);
     };
+
+    // Apply day/night flag overrides
+    if args.day {
+        weather_data.is_night = false;
+    } else if args.night {
+        weather_data.is_night = true;
+    }
 
     let grayscale = if args.colorful {
         false
@@ -70,7 +99,7 @@ async fn main() -> Result<()> {
     };
 
     let img = download_image(&url).await?;
-    let weather = Weather::from_str(weather_data.description);
+    let weather = weather_from_code(weather_data.weather_code);
 
     let units = if args.imperial {
         Units::Imperial
@@ -106,6 +135,15 @@ async fn main() -> Result<()> {
         disable_raw_mode().unwrap();
     });
 
-    animate_weather(&img, &weather, weather_rx, exit_rx, resize_rx, grayscale).await?;
+    animate_weather(
+        &img,
+        &weather,
+        weather_rx,
+        exit_rx,
+        resize_rx,
+        grayscale,
+        weather_data.is_night,
+    )
+    .await?;
     Ok(())
 }
