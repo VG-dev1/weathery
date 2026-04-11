@@ -1,6 +1,6 @@
 [package]
 name = "weathery"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 authors = ["VG-dev1 <vitohackergrgic@gmail.com>"]
 description = "A terminal weather app with animated cityscapes"
