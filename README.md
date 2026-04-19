@@ -22,6 +22,12 @@ It fetches a cityscape from Wikipedia, renders it in ANSI art, pulls live weathe
 cargo install weathery
 ```
 
+### Via AUR
+
+```bash
+yay -S weathery
+```
+
 ### Build from Source
 
 You need Rust installed.
